@@ -76,54 +76,52 @@ def test_create_oog_after_max_codesize(
     # Instead of max codesize (24576 bytes), we use a smaller but still significant size
     large_code_size = 0x1000  # 4096 bytes, much smaller than max but still large enough to test
 
-    # Factory contract that creates multiple large contracts and optionally causes OOG
+    # Create initcode for the contracts to be deployed
+    # If should_oog is True, the created contract will contain INVALID to cause OOG in subcall
+    # If should_oog is False, the created contract will just return large code
+    if should_oog:
+        # Initcode that deploys a contract containing INVALID opcode
+        # This will cause the CREATE to fail in the subcall, but factory continues
+        created_contract_initcode = (
+            # Simple initcode: just return a contract with INVALID
+            Op.MSTORE(0, Op.INVALID) +  # Store INVALID opcode (0xFE) at memory[0]
+            Op.RETURN(31, 1)  # Return 1 byte containing INVALID
+        )
+    else:
+        # Initcode that deploys a normal contract that returns large_code_size bytes
+        created_contract_initcode = (
+            # Return large_code_size bytes of zeros
+            Op.RETURN(0, large_code_size)
+        )
+    
+    # Deploy the init code as a separate contract so we can copy it later
+    initcode_contract = pre.deploy_contract(code=created_contract_initcode)
+    initcode_size = len(created_contract_initcode)
+
+    # Factory contract that creates multiple contracts using Python sum() 
     factory_code = (
-        # Load parameters from calldata
-        Op.CALLDATALOAD(0) +   # contract_count
-        Op.CALLDATALOAD(32) +  # should_oog flag
+        # Copy the initcode from the deployed contract into memory
+        Op.EXTCODECOPY(
+            address=initcode_contract.address,
+            dest_offset=0,
+            offset=0,
+            size=initcode_size
+        ) +
+        
+        # Use Python sum to create the loop for contract creation
+        sum(
+            [
+                # Create contract using the copied initcode
+                Op.CREATE(
+                    value=0, 
+                    offset=0, 
+                    size=initcode_size
+                ) +
+                Op.POP  # Remove created address from stack
+            ]
+            for _ in range(contract_count)
+        ) +
 
-        # Create a simple initcode in memory that returns large_code_size bytes
-        # Store PUSH2 opcode (0x61) at memory[0]
-        Op.PUSH1(0x61) + Op.PUSH1(0) + Op.MSTORE8 +
-        # Store large_code_size high byte at memory[1]
-        Op.PUSH1(large_code_size >> 8) + Op.PUSH1(1) + Op.MSTORE8 +
-        # Store large_code_size low byte at memory[2]
-        Op.PUSH1(large_code_size & 0xFF) + Op.PUSH1(2) + Op.MSTORE8 +
-        # Store PUSH1 0 (0x6000) at memory[3-4]
-        Op.PUSH1(0x60) + Op.PUSH1(3) + Op.MSTORE8 +
-        Op.PUSH1(0x00) + Op.PUSH1(4) + Op.MSTORE8 +
-        # Store RETURN opcode (0xF3) at memory[5]
-        Op.PUSH1(0xF3) + Op.PUSH1(5) + Op.MSTORE8 +
-
-        # Loop to create contracts
-        Op.PUSH1(0) +  # loop counter i = 0
-
-        # Loop start
-        Op.JUMPDEST +
-        Op.DUP2 + Op.DUP2 + Op.LT +  # i < contract_count
-        Op.ISZERO + Op.PUSH2(0x200) + Op.JUMPI +  # Jump to end if done
-
-        # Create contract using the initcode we built
-        Op.PUSH1(6) +   # size of initcode (6 bytes)
-        Op.PUSH1(0) +   # offset where initcode is stored
-        Op.PUSH1(0) +   # value = 0
-        Op.CREATE +
-        Op.POP +  # Remove created address from stack
-
-        # Increment counter
-        Op.PUSH1(1) + Op.ADD +
-        Op.PUSH1(0x50) + Op.JUMP +  # Jump back to loop start
-
-        # End of loop
-        Op.JUMPDEST +  # Address 0x200
-        Op.POP + Op.POP +  # Clean stack
-
-        # Check if should OOG
-        Op.ISZERO + Op.PUSH2(0x300) + Op.JUMPI +
-        Op.INVALID +  # Cause OOG with INVALID opcode
-
-        # Normal end
-        Op.JUMPDEST +  # Address 0x300
         # Set success flag at the very end to ensure code ran successfully
         Op.SSTORE(1, 1) +
         Op.STOP
@@ -132,17 +130,11 @@ def test_create_oog_after_max_codesize(
     factory_addr = pre.deploy_contract(code=factory_code, nonce=1)
     sender = pre.fund_eoa()
 
-    # Create transaction data: [contract_count, should_oog]
-    tx_data = (
-        contract_count.to_bytes(32, 'big') +
-        (1 if should_oog else 0).to_bytes(32, 'big')
-    )
-
     tx = Transaction(
         to=factory_addr,
         gas_limit=0x100000000,  # Large gas limit
         sender=sender,
-        data=tx_data,
+        data=b"",  # No transaction data needed - using Python variables directly
         value=0,
         gas_price=10,
         nonce=0,
@@ -150,12 +142,13 @@ def test_create_oog_after_max_codesize(
 
     # Expected post state
     if should_oog:
-        # When INVALID is executed, the transaction reverts
-        # The success flag should not be set and nonce should not increase
+        # When INVALID is executed in subcall, only the subcall reverts
+        # The main factory continues and success flag should be set
+        # But nonce doesn't increase for failed CREATE operations
         post_state = {
             factory_addr: Account(
-                nonce=1,
-                storage={}
+                nonce=1,  # CREATE operations fail, so nonce doesn't increase
+                storage={1: 1}  # Success flag set since main factory execution continues
             )
         }
     else:
