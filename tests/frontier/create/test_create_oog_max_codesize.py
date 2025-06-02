@@ -1,7 +1,24 @@
 """
 Test CREATE operations with out-of-gas scenarios after max codesize deployments.
 
-Converted from CreateOOGafterMaxCodesizeFiller.yml with reduced contract interactions.
+This test is a Python conversion of CreateOOGafterMaxCodesizeFiller.yml from the ethereum/tests
+repository. The original test creates a large number of max-codesize contracts (24KB each) and
+tests various OOG scenarios.
+
+This conversion simplifies the test by:
+1. Reducing the number of contracts created (2-3 instead of 250)
+2. Using smaller contract sizes (4KB instead of 24KB) while maintaining test coverage
+3. Focusing on the core CREATE+OOG behavior rather than complex multi-contract interactions
+4. Converting from static YAML format to Python StateTestFiller format
+
+The test validates:
+- Creating multiple large contracts in a loop
+- Proper transaction reversion when OOG occurs during contract creation
+- Correct state changes (nonce increments, storage updates) on successful execution
+- Difference in behavior between success and OOG scenarios
+
+Original test reference:
+tests/static/state_tests/stCreateTest/CreateOOGafterMaxCodesizeFiller.yml
 """
 
 import pytest
@@ -50,6 +67,10 @@ def test_create_oog_after_max_codesize(
     Note: This is a simplified version of the original test that reduces
     the number of contract interactions while maintaining core test logic.
     The max codesize aspect is simplified to focus on the OOG behavior.
+    
+    To run this test:
+    1. Install the project dependencies: pip install -e .
+    2. Run with pytest: pytest tests/frontier/create/test_create_oog_max_codesize.py
     """
     
     # Simple initcode that creates a contract that stores a value and returns some large code
