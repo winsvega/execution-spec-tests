@@ -102,7 +102,7 @@ def test_create_oog_after_max_codesize(
     factory_code = (
         # Copy the initcode from the deployed contract into memory
         Op.EXTCODECOPY(
-            address=initcode_contract.address,
+            address=initcode_contract,
             dest_offset=0,
             offset=0,
             size=initcode_size
